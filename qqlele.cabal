@@ -8,9 +8,12 @@ build-type:             Simple
 cabal-version:          >=1.8
 
 library
-  exposed-modules:      QQLeLe.X86
+  exposed-modules:      QQLeLe.Asm,
+                        QQLeLe.X86
   --other-modules:        --
   hs-source-dirs:       src
   build-depends:        base >=4.6,
-                        bytestring >=0.10
+                        bytestring >=0.10,
+                        containers >=0.5,
+                        mtl >=2.1
 

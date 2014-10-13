@@ -25,7 +25,6 @@ module QQLeLe.X86
     , regTypeBytes
 
     ) where
-
 -- }}}
 
 -- imports {{{
