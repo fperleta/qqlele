@@ -11,5 +11,6 @@ library
   exposed-modules:      QQLeLe.X86
   --other-modules:        --
   hs-source-dirs:       src
-  build-depends:        base >=4.6
+  build-depends:        base >=4.6,
+                        bytestring >=0.10
 

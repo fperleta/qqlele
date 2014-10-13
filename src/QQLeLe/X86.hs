@@ -17,6 +17,7 @@ module QQLeLe.X86
 
     -- front-end:
     , encInstr
+    , encInstrBS
 
     -- utility functions:
     , cond
@@ -28,6 +29,8 @@ module QQLeLe.X86
 -- }}}
 
 -- imports {{{
+import qualified Data.ByteString as BS
+import           Data.ByteString (ByteString)
 import           Data.Bits
 import           Data.Word
 -- }}}
@@ -342,6 +345,9 @@ cond ss = case ss of
 -- }}}
 
 -- encoding {{{
+
+encInstrBS :: Instr -> ByteString
+encInstrBS = BS.pack . encInstr
 
 encInstr :: Instr -> [Word8]
 encInstr I_nop = [0x90]
