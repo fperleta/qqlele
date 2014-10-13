@@ -206,17 +206,26 @@ toSignExtByte (b:bs)
 
 -- effective addresses {{{
 
--- addr = disp + reg[base] + (reg[index] << scale)
-data EffAddr = EffAddr
-    { eaDisp :: Word32
-    , eaBase :: Maybe RegName
-    , eaIndexShift :: Maybe (RegName, Word8)
-    }
+data EffAddr
+
+    -- addr = disp + reg[base] + (reg[index] << scale)
+    = EffAddr
+        { eaDisp :: Word32
+        , eaBase :: Maybe RegName
+        , eaIndexShift :: Maybe (RegName, Word8)
+        }
+
+    -- addr = disp + eip/rip
+    | RelAddr
+        { eaDisp :: Word32
+        }
+
   deriving (Show, Eq)
 
 -- (scale, index, base, mod, rm, sibp, disp)
 encEffAddr :: EffAddr -> (Word8, Word8, Word8, Word8, Word8, Bool, [Word8])
 encEffAddr addr = case addr of
+
     -- [k]
     EffAddr k Nothing Nothing ->
         ( 0, 4, 5
@@ -274,6 +283,12 @@ encEffAddr addr = case addr of
                 , True, disp'
                 )
         } in res
+
+    RelAddr k ->
+        ( 0, 0, 5
+        , 0, 5
+        , False, encWord32 k
+        )
 
 -- }}}
 
