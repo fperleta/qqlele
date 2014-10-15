@@ -10,6 +10,7 @@ cabal-version:          >=1.8
 library
   exposed-modules:      QQLeLe.Asm,
                         QQLeLe.CFG,
+                        QQLeLe.SSA,
                         QQLeLe.X86
   --other-modules:        --
   hs-source-dirs:       src
