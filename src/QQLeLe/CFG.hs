@@ -7,7 +7,7 @@
 -- extensions {{{
 {-# LANGUAGE
         FlexibleContexts, FlexibleInstances, FunctionalDependencies, GeneralizedNewtypeDeriving,
-        MultiParamTypeClasses, RankNTypes, UndecidableInstances
+        MultiParamTypeClasses, OverlappingInstances, RankNTypes, UndecidableInstances
     #-}
 -- }}}
 
@@ -21,7 +21,7 @@ module QQLeLe.CFG
     -- graphs:
     , CFGT()
     , runCFGT
-    , MonadCFG()
+    , MonadCFG(..)
 
     -- graph operations:
     , rootBB
@@ -30,6 +30,11 @@ module QQLeLe.CFG
     , readBB
     , predBB
     , succBB
+
+    -- traversal:
+    , reachableBBs
+    , traverseBBs
+    , traverseBBs_
 
     ) where
 -- }}}
@@ -80,7 +85,7 @@ cfgUpdate (BB k) x (CFG n bbs pss sss) = CFG n bbs pss' sss
 -- the monad transformer {{{
 
 newtype CFGT bb g m a = CFGT { unCFGT :: StateT (CFG bb g) m a }
-  deriving (Functor, Applicative, Monad, MonadIO)
+  deriving (Functor, Applicative, Monad, MonadIO, MonadTrans)
 
 runCFGT :: (Monad m) => (forall g. CFGT bb g m a) -> m a
 runCFGT (CFGT body) = evalStateT body cfgEmpty
@@ -124,15 +129,48 @@ readBB (BB k) = cfgState $ \g -> case IM.lookup k $ cfgBBlocks g of
     Just x -> (x, g)
     Nothing -> error "readBB: invalid basic block reference"
 
-predBB :: (MonadCFG bb g m) => (CFG bb g -> IntMap IntSet) -> BB g -> m [BB g]
-predBB f (BB k) = cfgState $ \g -> let
+predBB :: (MonadCFG bb g m) => BB g -> m [BB g]
+predBB (BB k) = cfgState $ \g -> let
     { ps = IM.findWithDefault IS.empty k $ cfgPred g
     } in (map BB $ IS.toList ps, g)
 
-succBB :: (MonadCFG bb g m) => (CFG bb g -> IntMap IntSet) -> BB g -> m [BB g]
-succBB f (BB k) = cfgState $ \g -> let
+succBB :: (MonadCFG bb g m) => BB g -> m [BB g]
+succBB (BB k) = cfgState $ \g -> let
     { ss = IM.findWithDefault IS.empty k $ cfgSucc g
     } in (map BB $ IS.toList ss, g)
+
+-- }}}
+
+-- traversal {{{
+
+reachableBBs :: (MonadCFG bb g m) => m [BB g]
+reachableBBs = do
+    mroot <- rootBB
+    case mroot of
+        Just root -> traverseBBs root $ \bb -> do
+            ss <- succBB bb
+            return (bb, ss)
+        Nothing -> return []
+
+traverseBBs :: (MonadCFG bb g m) => BB g -> (BB g -> m (a, [BB g])) -> m [a]
+traverseBBs from action = go IS.empty [from]
+  where
+    go _ [] = return []
+    go seen (bb@(BB k) : rest)
+        | k `IS.member` seen = go seen rest
+        | otherwise = do
+            (x, ss) <- action bb
+            (x :) `liftM` go (IS.insert k seen) (ss ++ rest)
+
+traverseBBs_ :: (MonadCFG bb g m) => BB g -> (BB g -> m [BB g]) -> m ()
+traverseBBs_ from action = go IS.empty [from]
+  where
+    go _ [] = return ()
+    go seen (bb@(BB k) : rest)
+        | k `IS.member` seen = go seen rest
+        | otherwise = do
+            ss <- action bb
+            go (IS.insert k seen) (ss ++ rest)
 
 -- }}}
 
