@@ -6,8 +6,10 @@
 
 -- extensions {{{
 {-# LANGUAGE
-        FlexibleContexts, FlexibleInstances, FunctionalDependencies, GeneralizedNewtypeDeriving,
-        MultiParamTypeClasses, OverlappingInstances, RankNTypes, UndecidableInstances
+        FlexibleContexts, FlexibleInstances, FunctionalDependencies,
+        GeneralizedNewtypeDeriving, KindSignatures, MultiParamTypeClasses,
+        OverlappingInstances, RankNTypes, ScopedTypeVariables,
+        UndecidableInstances
     #-}
 -- }}}
 
@@ -26,7 +28,6 @@ module QQLeLe.CFG
     -- graph operations:
     , rootBB
     , newBB
-    , writeBB
     , readBB
     , predBB
     , succBB
@@ -36,11 +37,25 @@ module QQLeLe.CFG
     , traverseBBs
     , traverseBBs_
 
+    -- attributes:
+    , Tag(..)
+    , BBAttrT()
+    , runBBAttrT
+    , MonadBBAttr(..)
+    , getBBAttr
+    , setBBAttr
+
+    -- pure attributes:
+    , PureBBAttrT()
+    , runPureBBAttrT
+    , MonadPureBBAttr(..)
+
     ) where
 -- }}}
 
 -- imports {{{
 import           Control.Applicative
+import           Control.Monad.Reader
 import           Control.Monad.State
 import qualified Data.IntMap as IM
 import           Data.IntMap (IntMap)
@@ -93,6 +108,12 @@ runCFGT (CFGT body) = evalStateT body cfgEmpty
 class (Monad m) => MonadCFG bb g m | m -> bb g where
     cfgState :: (CFG bb g -> (a, CFG bb g)) -> m a
 
+    writeBB :: (BBlock bb) => BB g -> bb g -> m ()
+    writeBB r@(BB k) x = cfgState $ \g -> let
+        { bbs = IM.insert k x $ cfgBBlocks g
+        ; g' = g { cfgBBlocks = bbs }
+        } in ((), cfgUpdate r x g')
+
 instance (Monad m) => MonadCFG bb g (CFGT bb g m) where
     cfgState = CFGT . state
 
@@ -111,18 +132,14 @@ rootBB = cfgState $ \g -> let
     } in (res, g)
 
 newBB :: (MonadCFG bb g m, BBlock bb) => bb g -> m (BB g)
-newBB x = cfgState $ \g -> let
-    { k = cfgNext g
-    ; r = BB k
-    ; bbs = IM.insert k x $ cfgBBlocks g
-    ; g' = g { cfgNext = succ k, cfgBBlocks = bbs }
-    } in (r, cfgUpdate r x g')
-
-writeBB :: (MonadCFG bb g m, BBlock bb) => BB g -> bb g -> m ()
-writeBB r@(BB k) x = cfgState $ \g -> let
-    { bbs = IM.insert k x $ cfgBBlocks g
-    ; g' = g { cfgBBlocks = bbs }
-    } in ((), cfgUpdate r x g')
+newBB x = do
+    bb <- cfgState $ \g -> let
+        { k = cfgNext g
+        ; r = BB k
+        ; g' = g { cfgNext = succ k }
+        } in (r, g')
+    writeBB bb x
+    return bb
 
 readBB :: (MonadCFG bb g m) => BB g -> m (bb g)
 readBB (BB k) = cfgState $ \g -> case IM.lookup k $ cfgBBlocks g of
@@ -171,6 +188,79 @@ traverseBBs_ from action = go IS.empty [from]
         | otherwise = do
             ss <- action bb
             go (IS.insert k seen) (ss ++ rest)
+
+-- }}}
+
+-- attributes {{{
+
+class Tag tag t g | tag -> t g where
+    getTag :: tag
+
+newtype BBAttrT tag t (bb :: * -> *) g m a
+    = BBAttrT { unBBAttrT :: StateT (IntMap t) m a }
+  deriving (Functor, Applicative, Monad, MonadIO, MonadTrans)
+
+runBBAttrT :: (MonadCFG bb g m) => tag -> BBAttrT tag t bb g m a -> m a
+runBBAttrT _ = flip evalStateT IM.empty . unBBAttrT
+
+class (MonadCFG bb g m, Tag tag t g)
+        => MonadBBAttr tag t bb g m where
+    withBBAttr :: tag -> BB g -> (Maybe t -> (a, Maybe t)) -> m a
+
+instance (MonadCFG bb g m, Tag tag t g)
+        => MonadBBAttr tag t bb g (BBAttrT tag t bb g m) where
+    withBBAttr _ (BB k) f = BBAttrT $ do
+        (x, v) <- gets $ f . IM.lookup k
+        modify $ IM.alter (const v) k
+        return x
+
+instance (MonadBBAttr tag t bb g m, Tag tag t g, Monad (u m), MonadTrans u)
+        => MonadBBAttr tag t bb g (u m) where
+    withBBAttr tag bb = lift . withBBAttr tag bb
+
+setBBAttr :: (MonadBBAttr tag t bb g m, Tag tag t g) => tag -> BB g -> t -> m ()
+setBBAttr tag bb x = withBBAttr tag bb $ const ((), Just x)
+
+getBBAttr :: (MonadBBAttr tag t bb g m, Tag tag t g) => tag -> BB g -> m (Maybe t)
+getBBAttr tag bb = withBBAttr tag bb $ \v -> (v, v)
+
+-- }}}
+
+-- pure attributes {{{
+
+newtype PureBBAttrT tag t (bb :: * -> *) g m a
+    = PureBBAttrT { unPureBBAttrT :: ReaderT (bb g -> t) (BBAttrT tag t bb g m) a }
+  deriving (Functor, Applicative, Monad, MonadIO)
+
+runPureBBAttrT :: (MonadCFG bb g m) => tag -> (bb g -> t) -> PureBBAttrT tag t bb g m a -> m a
+runPureBBAttrT tag f = runBBAttrT tag . flip runReaderT f . unPureBBAttrT
+
+instance (MonadCFG bb g m, Tag tag t g) => MonadCFG bb g (PureBBAttrT tag t bb g m) where
+    cfgState = PureBBAttrT . cfgState
+    writeBB bb x = PureBBAttrT $ do
+        f <- ask
+        lift $ setBBAttr (getTag :: tag) bb (f x)
+        lift $ writeBB bb x
+
+class (MonadCFG bb g m, Tag tag t g)
+        => MonadPureBBAttr tag t bb g m where
+    pureBBAttr :: tag -> BB g -> m t
+
+instance (MonadCFG bb g m, Tag tag t g)
+        => MonadPureBBAttr tag t bb g (PureBBAttrT tag t bb g m) where
+    pureBBAttr tag bb = PureBBAttrT $ do
+        m <- lift $ getBBAttr tag bb
+        case m of
+            Just x -> return x
+            Nothing -> do
+                f <- ask
+                x <- f `liftM` readBB bb
+                setBBAttr tag bb x
+                return x
+
+instance (MonadPureBBAttr tag t bb g m, Tag tag t g, Monad (u m), MonadTrans u)
+        => MonadPureBBAttr tag t bb g (u m) where
+    pureBBAttr tag = lift . pureBBAttr tag
 
 -- }}}
 
